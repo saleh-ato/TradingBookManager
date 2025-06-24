@@ -9,13 +9,13 @@ import seaborn as sns # For nicer plots
 
 # For PDF Export
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image # ADDED Image
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 
 # Initialize Excel file and DataFrame
-EXCEL_FILE = 'trading_book.xlsx'
+EXCEL_FILE = '' # This will now be set by the initial book selection
 # Global variable for undo/redo stack
 undo_stack = []
 redo_stack = []
@@ -33,76 +33,95 @@ decimal_precision = {
 # Global variables to track Toplevel windows
 show_records_window = None
 summary_window = None
-settings_window = None # Track settings window too
+settings_window = None 
+book_selection_window = None 
 
-def init_excel_file():
+def init_excel_file(file_path):
+    """Initializes the Excel file with required columns if it doesn't exist."""
+    global EXCEL_FILE
+    EXCEL_FILE = file_path 
     try:
         df = pd.read_excel(EXCEL_FILE)
+        required_columns = ['Date', 'Ticker', 'Trade_Type', 'Quantity', 'Price', 'Total', 'Notes']
+        if not all(col in df.columns for col in required_columns):
+            messagebox.showwarning("File Structure Warning", 
+                                   "Existing Excel file is missing required columns. A new structure will be applied.")
+            df = pd.DataFrame(columns=required_columns)
+            df.to_excel(EXCEL_FILE, index=False)
     except FileNotFoundError:
         df = pd.DataFrame(columns=['Date', 'Ticker', 'Trade_Type', 'Quantity', 'Price', 'Total', 'Notes'])
         df.to_excel(EXCEL_FILE, index=False)
+    except Exception as e:
+        messagebox.showerror("File Error", f"Could not open or initialize Excel file: {e}\nCreating a new empty file.")
+        df = pd.DataFrame(columns=['Date', 'Ticker', 'Trade_Type', 'Quantity', 'Price', 'Total', 'Notes'])
+        df.to_excel(EXCEL_FILE, index=False)
+
 
 def load_data():
+    """Loads DataFrame from the global EXCEL_FILE."""
+    if not EXCEL_FILE:
+        return pd.DataFrame(columns=['Date', 'Ticker', 'Trade_Type', 'Quantity', 'Price', 'Total', 'Notes'])
     try:
         df = pd.read_excel(EXCEL_FILE)
-        # Ensure 'Date' is correctly parsed on load for internal consistency
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
         return df
     except FileNotFoundError:
-        messagebox.showerror("Error", "Excel file not found. Initializing a new one.")
-        init_excel_file()
+        messagebox.showerror("Error", f"Excel file '{EXCEL_FILE}' not found. It might have been moved or deleted.")
+        init_excel_file(EXCEL_FILE)
         return pd.read_excel(EXCEL_FILE)
+    except Exception as e:
+        messagebox.showerror("Data Load Error", f"Failed to load data from Excel: {e}")
+        return pd.DataFrame(columns=['Date', 'Ticker', 'Trade_Type', 'Quantity', 'Price', 'Total', 'Notes'])
+
 
 def save_data(df, record_undo=True):
     """Saves DataFrame to Excel and manages undo/redo stack."""
+    if not EXCEL_FILE:
+        messagebox.showwarning("Save Error", "No Excel file selected or created. Cannot save data.")
+        return
+
     if record_undo:
-        # Save current state before modification
         current_df_state = load_data()
         undo_stack.append(current_df_state.copy())
         if len(undo_stack) > MAX_UNDO_HISTORY:
-            undo_stack.pop(0) # Remove oldest state if history limit exceeded
-        redo_stack.clear() # Any new action clears the redo stack
+            undo_stack.pop(0)
+        redo_stack.clear()
 
-    df.to_excel(EXCEL_FILE, index=False)
+    try:
+        df.to_excel(EXCEL_FILE, index=False)
+    except Exception as e:
+        messagebox.showerror("Save Error", f"Failed to save data to Excel: {e}")
 
 def undo_last_action():
-    global show_records_window, summary_window # Declare global usage for modification
+    global show_records_window, summary_window 
     if undo_stack:
-        # Save current state to redo stack before undoing
         current_df_state = load_data()
         redo_stack.append(current_df_state.copy())
 
-        # Load the previous state from undo stack
         previous_df_state = undo_stack.pop()
         previous_df_state.to_excel(EXCEL_FILE, index=False)
         messagebox.showinfo("Undo", "Last action undone.")
 
-        # Refresh any open windows that display data
-        # Check if the window object itself is not None before calling winfo_exists()
         if show_records_window is not None and show_records_window.winfo_exists():
-            show_records_window.destroy() # Re-open to refresh
+            show_records_window.destroy() 
             show_records()
         if summary_window is not None and summary_window.winfo_exists():
-            summary_window.destroy() # Re-open to refresh
+            summary_window.destroy() 
             show_portfolio_summary()
     else:
         messagebox.showinfo("Undo", "No more actions to undo.")
 
 def redo_last_undo():
-    global show_records_window, summary_window # Declare global usage for modification
+    global show_records_window, summary_window 
     if redo_stack:
-        # Save current state to undo stack before redoing
         current_df_state = load_data()
         undo_stack.append(current_df_state.copy())
 
-        # Load the next state from redo stack
         next_df_state = redo_stack.pop()
         next_df_state.to_excel(EXCEL_FILE, index=False)
         messagebox.showinfo("Redo", "Last undo redone.")
 
-        # Refresh any open windows that display data
-        # Check if the window object itself is not None before calling winfo_exists()
         if show_records_window is not None and show_records_window.winfo_exists():
             show_records_window.destroy()
             show_records()
@@ -130,8 +149,7 @@ def edit_record(index, date, ticker, trade_type, quantity, price, notes):
     df = load_data()
     if 0 <= index < len(df):
         try:
-            # Record state BEFORE editing
-            save_data(df.copy(), record_undo=True) # Manually record undo for edit
+            save_data(df.copy(), record_undo=True) 
 
             df.at[index, 'Date'] = date
             df.at[index, 'Ticker'] = ticker
@@ -140,7 +158,7 @@ def edit_record(index, date, ticker, trade_type, quantity, price, notes):
             df.at[index, 'Price'] = price
             df.at[index, 'Total'] = quantity * price
             df.at[index, 'Notes'] = notes
-            df.to_excel(EXCEL_FILE, index=False) # Direct save as save_data already recorded
+            df.to_excel(EXCEL_FILE, index=False) 
             return True
         except Exception as e:
             messagebox.showerror("Error", f"Failed to edit record: {e}")
@@ -153,11 +171,10 @@ def delete_record(index):
     df = load_data()
     if 0 <= index < len(df):
         try:
-            # Record state BEFORE deleting
-            save_data(df.copy(), record_undo=True) # Manually record undo for delete
+            save_data(df.copy(), record_undo=True) 
 
             df = df.drop(index).reset_index(drop=True)
-            df.to_excel(EXCEL_FILE, index=False) # Direct save as save_data already recorded
+            df.to_excel(EXCEL_FILE, index=False) 
             return True
         except Exception as e:
             messagebox.showerror("Error", f"Failed to delete record: {e}")
@@ -168,18 +185,16 @@ def delete_record(index):
 
 # --- UI Functions ---
 
-def center_window(window): # Removed 'parent' argument
+def center_window(window):
+    """Centers a Tkinter window on the screen."""
     window.update_idletasks()
     
-    # Get screen width and height
     screen_width = window.winfo_screenwidth()
     screen_height = window.winfo_screenheight()
 
-    # Get window width and height
     window_width = window.winfo_width()
     window_height = window.winfo_height()
 
-    # Calculate x and y coordinates for the window to be centered on the screen
     x = (screen_width // 2) - (window_width // 2)
     y = (screen_height // 2) - (window_height // 2)
 
@@ -190,7 +205,7 @@ def validate_input(date_str, quantity_str, price_str, trade_type):
     try:
         datetime.strptime(date_str, '%Y-%m-%d')
     except ValueError:
-        messagebox.showerror("Validation Error", "Date must be inYYYY-MM-DD format.")
+        messagebox.showerror("Validation Error", "Date must be in YYYY-MM-DD format.")
         return False, None, None
 
     try:
@@ -213,9 +228,8 @@ def add_edit_form(is_edit=False, record_index=None, current_data=None, update_ca
     form_window = Toplevel(root)
     form_window.title("Edit Record" if is_edit else "Add Record")
     form_window.geometry("350x300")
-    center_window(form_window) # Changed
+    center_window(form_window)
 
-    # Bind the close protocol for the form window
     form_window.protocol("WM_DELETE_WINDOW", lambda: on_toplevel_closing(form_window))
 
     labels_text = ['Date:', 'Ticker:', 'Trade Type:', 'Quantity:', 'Price:', 'Notes:']
@@ -237,27 +251,22 @@ def add_edit_form(is_edit=False, record_index=None, current_data=None, update_ca
         entries[label_text.replace(':', '').strip()] = entry
 
     if is_edit and current_data:
-        # Check if it's already a pandas Timestamp (datetime64)
         if pd.api.types.is_datetime64_any_dtype(current_data['Date']):
             date_obj = current_data['Date'].to_pydatetime()
             entries['Date'].set_date(date_obj)
         else:
-            # If it's not a datetime64 (likely a string from Excel),
-            # try to parse it with the full format including time part
             try:
                 date_obj = datetime.strptime(str(current_data['Date']), '%Y-%m-%d %H:%M:%S')
                 entries['Date'].set_date(date_obj)
             except ValueError:
-                # If even that fails (e.g., date is corrupted or different format)
-                # try parsing just the date part (first 10 characters for YYYY-MM-DD)
                 try:
                     date_string_only = str(current_data['Date'])[:10]
                     date_obj = datetime.strptime(date_string_only, '%Y-%m-%d')
                     entries['Date'].set_date(date_obj)
                 except ValueError:
                     messagebox.showwarning("Date Error", "Could not parse existing date for Date Picker. Please verify format in Excel.")
-                    entries['Date'].delete(0, END) # Clear the field if unparseable
-                    entries['Date'].insert(0, str(current_data['Date'])) # Insert original string
+                    entries['Date'].delete(0, END)
+                    entries['Date'].insert(0, str(current_data['Date']))
 
         entries['Ticker'].insert(0, str(current_data['Ticker']))
         entries['Trade Type'].set(str(current_data['Trade_Type']))
@@ -286,7 +295,7 @@ def add_edit_form(is_edit=False, record_index=None, current_data=None, update_ca
         else:
             if add_record(date, ticker, trade_type, quantity, price, notes):
                 messagebox.showinfo("Success", "Record added successfully.")
-                if update_callback: # For consistency, refresh records after add too
+                if update_callback:
                     update_callback()
                 form_window.destroy()
 
@@ -305,12 +314,10 @@ def show_records():
 
     show_records_window = Toplevel(root)
     show_records_window.title("Trading Records")
-    show_records_window.geometry("1000x600") # Increased width from 900 to 1000
-    center_window(show_records_window) # Changed
+    show_records_window.geometry("1000x600")
+    center_window(show_records_window) 
 
-    # Bind the close protocol for this Toplevel window
     show_records_window.protocol("WM_DELETE_WINDOW", lambda: on_toplevel_closing(show_records_window))
-
 
     df = load_data()
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
@@ -354,18 +361,18 @@ def show_records():
     tree.column("#0", width=50, anchor="center")
 
     column_widths = {
-        'Date': 100, # YYYY-MM-DD
+        'Date': 100,
         'Ticker': 80,
         'Trade_Type': 70,
-        'Quantity': 120, # Increased for cryptocurrencies
+        'Quantity': 120,
         'Price': 100,
         'Total': 120,
-        'Notes': 150 # Increased for potentially longer notes
+        'Notes': 150
     }
 
-    for col in display_columns: # Iterate over the actual data columns
+    for col in display_columns:
         tree.heading(col, text=col, command=lambda _col=col: treeview_sort_column(tree, _col, False))
-        tree.column(col, width=column_widths.get(col, 100), anchor="center") # Default to 100 if not specified
+        tree.column(col, width=column_widths.get(col, 100), anchor="center")
     
     def populate_tree(data_frame):
         for item in tree.get_children():
@@ -473,7 +480,6 @@ def export_records_csv():
                                              title="Export Records as CSV")
     if file_path:
         try:
-            # Ensure date is string format for CSV export consistency
             df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
             df.to_csv(file_path, index=False)
             messagebox.showinfo("Export Success", "Records exported to CSV successfully!")
@@ -486,7 +492,7 @@ def calculate_realized_pnl(df):
     pnl = {}
     
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df_cleaned = df.dropna(subset=['Date']).copy() # Use .copy() to avoid SettingWithCopyWarning
+    df_cleaned = df.dropna(subset=['Date']).copy() 
     
     df_cleaned = df_cleaned.sort_values(by='Date').reset_index(drop=True)
 
@@ -539,7 +545,6 @@ def calculate_cumulative_pnl_per_ticker(df):
     for ticker in df_cleaned['Ticker'].unique():
         ticker_trades = df_cleaned[df_cleaned['Ticker'] == ticker].copy()
         
-        # Initialize holdings for FIFO calculation for this ticker
         buy_queue = [] # Stores (quantity, price) for buys
         daily_pnl = {}
         current_cumulative_pnl = 0
@@ -572,18 +577,14 @@ def calculate_cumulative_pnl_per_ticker(df):
                         buy_data['quantity'] -= sell_quantity
                         sell_quantity = 0
             
-            # Record cumulative P&L for this date
             daily_pnl[trade_date] = current_cumulative_pnl
         
-        # Convert daily_pnl to a pandas Series, then reindex to fill missing dates
-        # This ensures a continuous time series for plotting
         if daily_pnl:
             pnl_series = pd.Series(daily_pnl)
-            # Create a full date range from the first trade to the last
             idx = pd.date_range(start=pnl_series.index.min(), end=pnl_series.index.max())
             pnl_series.index = pd.to_datetime(pnl_series.index)
-            pnl_series = pnl_series.reindex(idx, method='ffill') # Forward-fill missing dates
-            pnl_series = pnl_series.fillna(0) # Fill initial NaNs if no trades on first day
+            pnl_series = pnl_series.reindex(idx, method='ffill')
+            pnl_series = pnl_series.fillna(0)
             cumulative_pnl_data[ticker] = pnl_series
     
     return cumulative_pnl_data
@@ -593,7 +594,7 @@ def get_current_holdings(df):
     holdings = {}
     
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df_cleaned = df.dropna(subset=['Date']).copy() # Use .copy() to avoid SettingWithCopyWarning
+    df_cleaned = df.dropna(subset=['Date']).copy() 
     
     df_cleaned = df_cleaned.sort_values(by='Date').reset_index(drop=True)
 
@@ -642,24 +643,17 @@ def calculate_performance_metrics(df):
     realized_pnl = calculate_realized_pnl(df.copy())
     total_realized_pnl = sum(realized_pnl.values())
 
-    # Total Return / ROI
-    # Simplified ROI: (Total Sell Value - Total Buy Value) / Total Buy Value
-    # More accurately, you'd track cash inflow/outflow. This is a basic version.
     if total_buy_value > 0:
         total_roi = (total_sell_value - total_buy_value) / total_buy_value * 100
     else:
         total_roi = 0.0
 
-    # Win/Loss Rate
-    # Assuming each 'buy' followed by 'sell' for the same ticker is a "trade"
-    # This simplified calculation counts each ticker's realized P&L as one outcome
     win_trades = sum(1 for pnl in realized_pnl.values() if pnl > 0)
     loss_trades = sum(1 for pnl in realized_pnl.values() if pnl < 0)
     total_closed_trades = win_trades + loss_trades
     
     win_rate = (win_trades / total_closed_trades * 100) if total_closed_trades > 0 else 0.0
 
-    # Average Profit/Loss per Trade (only for closed trades)
     avg_profit_per_trade = (sum(p for p in realized_pnl.values() if p > 0) / win_trades) if win_trades > 0 else 0.0
     avg_loss_per_trade = (sum(abs(p) for p in realized_pnl.values() if p < 0) / loss_trades) if loss_trades > 0 else 0.0
 
@@ -679,12 +673,10 @@ def show_portfolio_summary():
 
     summary_window = Toplevel(root)
     summary_window.title("Portfolio Summary")
-    summary_window.geometry("700x750") # Make window taller for more content
-    center_window(summary_window) # Changed
+    summary_window.geometry("700x750")
+    center_window(summary_window)
 
-    # Bind the close protocol for this Toplevel window
     summary_window.protocol("WM_DELETE_WINDOW", lambda: on_toplevel_closing(summary_window))
-
 
     df = load_data()
     
@@ -727,7 +719,7 @@ def show_portfolio_summary():
             ttk.Label(holdings_frame, text=f"{data['quantity']:.{decimal_precision['quantity']}f}").grid(row=i+1, column=1, padx=5, pady=2)
             ttk.Label(holdings_frame, text=f"{data['average_buy_price']:.{decimal_precision['avg_buy_price']}f}").grid(row=i+1, column=2, padx=5, pady=2)
     else:
-        Label(holdings_frame, text="No current holdings to display.").pack()
+        Label(holdings_frame, text="No current holdings.").pack(pady=5)
 
     # --- Charts ---
     chart_notebook = ttk.Notebook(summary_window)
@@ -742,57 +734,55 @@ def show_portfolio_summary():
         sizes = [data['quantity'] * data['average_buy_price'] for data in current_holdings.values()] # Value-based allocation
 
         if sum(sizes) > 0:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, textprops={'fontsize': 8})
-            ax.axis('equal')
-            ax.set_title("Portfolio Allocation by Value", fontsize=10)
-            fig.tight_layout() # Adjust layout to prevent labels overlapping
+            fig_pie, ax_pie = plt.subplots(figsize=(5, 4))
+            ax_pie.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, textprops={'fontsize': 8})
+            ax_pie.axis('equal')
+            ax_pie.set_title("Portfolio Allocation by Value", fontsize=10)
+            fig_pie.tight_layout()
 
-            canvas = FigureCanvasTkAgg(fig, master=pie_chart_frame)
-            canvas_widget = canvas.get_tk_widget()
-            canvas_widget.pack(fill='both', expand=True)
-            canvas.draw()
+            canvas_pie = FigureCanvasTkAgg(fig_pie, master=pie_chart_frame)
+            canvas_pie_widget = canvas_pie.get_tk_widget()
+            canvas_pie_widget.pack(fill='both', expand=True)
+            canvas_pie.draw()
         else:
             Label(pie_chart_frame, text="No positive portfolio value to display chart.").pack(expand=True)
     else:
         Label(pie_chart_frame, text="No holdings to generate allocation chart.").pack(expand=True)
 
-    # P&L Over Time Chart (Line Chart - Total)
-    pnl_over_time_frame = Frame(chart_notebook)
-    chart_notebook.add(pnl_over_time_frame, text="Total P&L Over Time")
+    # Total P&L Over Time Chart (Line Chart)
+    total_pnl_over_time_frame = Frame(chart_notebook)
+    chart_notebook.add(total_pnl_over_time_frame, text="Total P&L Over Time")
 
     if not df.empty:
         daily_trades = df.copy()
-        daily_trades['Date'] = pd.to_datetime(daily_trades['Date']) # Ensure datetime type for grouping
+        daily_trades['Date'] = pd.to_datetime(daily_trades['Date'])
         daily_trades['Trade_Value'] = daily_trades.apply(lambda row: row['Total'] if row['Trade_Type'].lower() == 'sell' else -row['Total'], axis=1)
         
-        # Calculate overall cumulative P&L for plotting
         overall_daily_pnl_df = daily_trades.groupby('Date')['Trade_Value'].sum().to_frame()
         overall_daily_pnl_df['Cumulative_P&L'] = overall_daily_pnl_df['Trade_Value'].cumsum()
 
-        # Reindex to ensure continuous dates for smoother plotting
         if not overall_daily_pnl_df.empty:
             idx = pd.date_range(start=overall_daily_pnl_df.index.min(), end=overall_daily_pnl_df.index.max())
-            overall_daily_pnl_df = overall_daily_pnl_df.reindex(idx, method='ffill').fillna(0) # Forward-fill and fill initial NaNs with 0
+            overall_daily_pnl_df = overall_daily_pnl_df.reindex(idx, method='ffill').fillna(0)
 
-            fig_pnl, ax_pnl = plt.subplots(figsize=(5, 4))
-            sns.lineplot(x=overall_daily_pnl_df.index, y=overall_daily_pnl_df['Cumulative_P&L'], ax=ax_pnl)
-            ax_pnl.set_title("Total Cumulative P&L Over Time", fontsize=10)
-            ax_pnl.set_xlabel("Date", fontsize=8)
-            ax_pnl.set_ylabel("Cumulative P&L", fontsize=8)
-            ax_pnl.tick_params(axis='x', rotation=45, labelsize=7)
-            ax_pnl.tick_params(axis='y', labelsize=7)
-            ax_pnl.grid(True)
-            fig_pnl.tight_layout()
+            fig_total_pnl, ax_total_pnl = plt.subplots(figsize=(5, 4))
+            sns.lineplot(x=overall_daily_pnl_df.index, y=overall_daily_pnl_df['Cumulative_P&L'], ax=ax_total_pnl)
+            ax_total_pnl.set_title("Total Cumulative P&L Over Time", fontsize=10)
+            ax_total_pnl.set_xlabel("Date", fontsize=8)
+            ax_total_pnl.set_ylabel("Cumulative P&L", fontsize=8)
+            ax_total_pnl.tick_params(axis='x', rotation=45, labelsize=7)
+            ax_total_pnl.tick_params(axis='y', labelsize=7)
+            ax_total_pnl.grid(True)
+            fig_total_pnl.tight_layout()
 
-            canvas_pnl = FigureCanvasTkAgg(fig_pnl, master=pnl_over_time_frame)
-            canvas_pnl_widget = canvas_pnl.get_tk_widget()
-            canvas_pnl_widget.pack(fill='both', expand=True)
-            canvas_pnl.draw()
+            canvas_total_pnl = FigureCanvasTkAgg(fig_total_pnl, master=total_pnl_over_time_frame)
+            canvas_total_pnl_widget = canvas_total_pnl.get_tk_widget()
+            canvas_total_pnl_widget.pack(fill='both', expand=True)
+            canvas_total_pnl.draw()
         else:
-            Label(pnl_over_time_frame, text="Not enough data to generate Total P&L over time chart.").pack(expand=True)
+            Label(total_pnl_over_time_frame, text="Not enough data to generate Total P&L over time chart.").pack(expand=True)
     else:
-        Label(pnl_over_time_frame, text="No data to generate Total P&L over time chart.").pack(expand=True)
+        Label(total_pnl_over_time_frame, text="No data to generate Total P&L over time chart.").pack(expand=True)
 
 
     # Trade Volume Over Time (Bar Chart)
@@ -802,12 +792,10 @@ def show_portfolio_summary():
     if not df.empty:
         df_volume = df.copy()
         df_volume['Date'] = pd.to_datetime(df_volume['Date'])
-        # Aggregate quantity by date
         daily_volume = df_volume.groupby('Date')['Quantity'].sum()
 
         if not daily_volume.empty:
             fig_vol, ax_vol = plt.subplots(figsize=(5, 4))
-            # Corrected line to address FutureWarning
             sns.barplot(x=daily_volume.index, y=daily_volume.values, ax=ax_vol, hue=daily_volume.index, palette="viridis", legend=False)
             ax_vol.set_title("Trade Volume Over Time", fontsize=10)
             ax_vol.set_xlabel("Date", fontsize=8)
@@ -826,112 +814,342 @@ def show_portfolio_summary():
     else:
         Label(volume_over_time_frame, text="No data to generate Trade Volume chart.").pack(expand=True)
 
-    # Ticker Specific Cumulative P&L Chart (Line Chart) - UPDATED
+    # Ticker Specific Cumulative P&L Chart (Line Chart) - UPDATED with dropdown
     ticker_cumulative_pnl_frame = Frame(chart_notebook)
     chart_notebook.add(ticker_cumulative_pnl_frame, text="Ticker Cumulative P&L")
 
-    if not df.empty:
-        cumulative_pnl_per_ticker = calculate_cumulative_pnl_per_ticker(df.copy())
+    # Widgets for Ticker Specific P&L
+    ticker_pnl_control_frame = Frame(ticker_cumulative_pnl_frame)
+    ticker_pnl_control_frame.pack(pady=5)
+
+    Label(ticker_pnl_control_frame, text="Select Ticker:").pack(side=LEFT, padx=5)
+    
+    tickers = ["Select a Ticker"] + sorted(df['Ticker'].unique().tolist())
+    ticker_select_combobox = ttk.Combobox(ticker_pnl_control_frame, values=tickers, state="readonly", width=20)
+    ticker_select_combobox.set("Select a Ticker")
+    ticker_select_combobox.pack(side=LEFT, padx=5)
+
+    ticker_plot_canvas = None
+    ticker_plot_fig = None
+    ticker_plot_ax = None
+    
+    def update_ticker_pnl_chart(event=None):
+        nonlocal ticker_plot_canvas, ticker_plot_fig, ticker_plot_ax
+        selected_ticker = ticker_select_combobox.get()
         
-        if cumulative_pnl_per_ticker:
-            fig_ticker_cum_pnl, ax_ticker_cum_pnl = plt.subplots(figsize=(5, 4))
-            
-            # Use distinct markers/linestyles if many tickers for better differentiation
-            for ticker, pnl_series in cumulative_pnl_per_ticker.items():
-                sns.lineplot(x=pnl_series.index, y=pnl_series.values, ax=ax_ticker_cum_pnl, label=ticker, marker='o', markersize=3) # Added marker
-            
-            ax_ticker_cum_pnl.set_title("Cumulative P&L per Ticker Over Time", fontsize=10)
-            ax_ticker_cum_pnl.set_xlabel("Date", fontsize=8)
-            ax_ticker_cum_pnl.set_ylabel("Cumulative P&L", fontsize=8)
-            ax_ticker_cum_pnl.tick_params(axis='x', rotation=45, labelsize=7)
-            ax_ticker_cum_pnl.tick_params(axis='y', labelsize=7)
-            ax_ticker_cum_pnl.grid(True)
-            ax_ticker_cum_pnl.legend(fontsize=7, loc='upper left')
-            fig_ticker_cum_pnl.tight_layout()
+        if ticker_plot_canvas:
+            ticker_plot_canvas.get_tk_widget().destroy()
+            plt.close(ticker_plot_fig)
 
-            canvas_ticker_cum_pnl = FigureCanvasTkAgg(fig_ticker_cum_pnl, master=ticker_cumulative_pnl_frame)
-            canvas_ticker_cum_pnl_widget = canvas_ticker_cum_pnl.get_tk_widget()
-            canvas_ticker_cum_pnl_widget.pack(fill='both', expand=True)
-            canvas_ticker_cum_pnl.draw()
+        if selected_ticker == "Select a Ticker" or df.empty:
+            Label(ticker_cumulative_pnl_frame, text="Please select a ticker to view its cumulative P&L.").pack(expand=True)
+            return
+
+        cumulative_pnl_data = calculate_cumulative_pnl_per_ticker(df.copy())
+        if selected_ticker in cumulative_pnl_data:
+            pnl_series = cumulative_pnl_data[selected_ticker]
+
+            ticker_plot_fig, ticker_plot_ax = plt.subplots(figsize=(5, 4))
+            sns.lineplot(x=pnl_series.index, y=pnl_series.values, ax=ticker_plot_ax, marker='o', markersize=3)
+            
+            ticker_plot_ax.set_title(f"Cumulative P&L for {selected_ticker}", fontsize=10)
+            ticker_plot_ax.set_xlabel("Date", fontsize=8)
+            ticker_plot_ax.set_ylabel("Cumulative P&L", fontsize=8)
+            ticker_plot_ax.tick_params(axis='x', rotation=45, labelsize=7)
+            ticker_plot_ax.tick_params(axis='y', labelsize=7)
+            ticker_plot_ax.grid(True)
+            ticker_plot_fig.tight_layout()
+
+            ticker_plot_canvas = FigureCanvasTkAgg(ticker_plot_fig, master=ticker_cumulative_pnl_frame)
+            ticker_plot_canvas_widget = ticker_plot_canvas.get_tk_widget()
+            ticker_plot_canvas_widget.pack(fill='both', expand=True)
+            ticker_plot_canvas.draw()
         else:
-            Label(ticker_cumulative_pnl_frame, text="No cumulative P&L to display for tickers.").pack(expand=True)
-    else:
-        Label(ticker_cumulative_pnl_frame, text="No data to generate Ticker Cumulative P&L chart.").pack(expand=True)
+            Label(ticker_cumulative_pnl_frame, text=f"No cumulative P&L data for {selected_ticker}.").pack(expand=True)
 
+    ticker_select_combobox.bind("<<ComboboxSelected>>", update_ticker_pnl_chart)
+    update_ticker_pnl_chart()
+
+
+def export_summary_pdf():
+    df = load_data()
+    if df.empty:
+        messagebox.showinfo("Export", "No data to export summary.")
+        return
+
+    file_path = filedialog.asksaveasfilename(defaultextension=".pdf",
+                                             filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+                                             title="Export Portfolio Summary as PDF")
+    if not file_path:
+        return
+
+    try:
+        doc = SimpleDocTemplate(file_path, pagesize=letter)
+        styles = getSampleStyleSheet()
+        elements = []
+
+        # Title
+        elements.append(Paragraph("Portfolio Summary Report", styles['h1']))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Date of Report
+        elements.append(Paragraph(f"Report Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Performance Metrics
+        elements.append(Paragraph("Performance Metrics", styles['h2']))
+        metrics = calculate_performance_metrics(df.copy())
+        metrics_data = [
+            ["Metric", "Value"],
+            ["Total Realized P&L", f"{metrics['total_realized_pnl']:.{decimal_precision['pnl']}f}"],
+            ["Total ROI", f"{metrics['total_roi']:.2f}%"],
+            ["Win Rate", f"{metrics['win_rate']:.2f}%"],
+            ["Avg. Profit per Win", f"{metrics['avg_profit_per_trade']:.{decimal_precision['pnl']}f}"],
+            ["Avg. Loss per Loss", f"{metrics['avg_loss_per_trade']:.{decimal_precision['pnl']}f}"]
+        ]
+        metrics_table = Table(metrics_data, colWidths=[2.5*inch, 2.5*inch])
+        metrics_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        elements.append(metrics_table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Current Holdings
+        elements.append(Paragraph("Current Holdings", styles['h2']))
+        current_holdings = get_current_holdings(df.copy())
+        if current_holdings:
+            holdings_data = [["Ticker", "Quantity", "Avg. Buy Price"]]
+            for ticker, data in current_holdings.items():
+                holdings_data.append([
+                    ticker,
+                    f"{data['quantity']:.{decimal_precision['quantity']}f}",
+                    f"{data['average_buy_price']:.{decimal_precision['avg_buy_price']}f}"
+                ])
+            holdings_table = Table(holdings_data, colWidths=[1.5*inch, 1.5*inch, 2*inch])
+            holdings_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            elements.append(holdings_table)
+        else:
+            elements.append(Paragraph("No current holdings.", styles['Normal']))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Cumulative P&L Plot (Total) for PDF
+        daily_trades_pdf = df.copy()
+        daily_trades_pdf['Date'] = pd.to_datetime(daily_trades_pdf['Date'])
+        daily_trades_pdf['Trade_Value'] = daily_trades_pdf.apply(lambda row: row['Total'] if row['Trade_Type'].lower() == 'sell' else -row['Total'], axis=1)
+        overall_daily_pnl_df_pdf = daily_trades_pdf.groupby('Date')['Trade_Value'].sum().to_frame()
+        overall_daily_pnl_df_pdf['Cumulative_P&L'] = overall_daily_pnl_df_pdf['Trade_Value'].cumsum()
+        
+        if not overall_daily_pnl_df_pdf.empty:
+            idx_pdf = pd.date_range(start=overall_daily_pnl_df_pdf.index.min(), end=overall_daily_pnl_df_pdf.index.max())
+            overall_daily_pnl_df_pdf = overall_daily_pnl_df_pdf.reindex(idx_pdf, method='ffill').fillna(0)
+
+            fig_pdf_total_pnl, ax_pdf_total_pnl = plt.subplots(figsize=(6, 3)) 
+            sns.lineplot(x=overall_daily_pnl_df_pdf.index, y=overall_daily_pnl_df_pdf['Cumulative_P&L'], ax=ax_pdf_total_pnl)
+            ax_pdf_total_pnl.set_title("Total Cumulative P&L Over Time", fontsize=10)
+            ax_pdf_total_pnl.set_xlabel("Date", fontsize=8)
+            ax_pdf_total_pnl.set_ylabel("Cumulative P&L", fontsize=8)
+            ax_pdf_total_pnl.tick_params(axis='x', rotation=45, labelsize=7)
+            ax_pdf_total_pnl.tick_params(axis='y', labelsize=7)
+            ax_pdf_total_pnl.grid(True)
+            fig_pdf_total_pnl.tight_layout()
+
+            from io import BytesIO
+            img_data = BytesIO()
+            fig_pdf_total_pnl.savefig(img_data, format='png')
+            img_data.seek(0)
+            plt.close(fig_pdf_total_pnl)
+
+            # --- CORRECTED LINE FOR TOTAL PNL PLOT ---
+            elements.append(Paragraph("Total Cumulative P&L Over Time", styles['h2']))
+            elements.append(Image(img_data)) # Use Image class
+            elements.append(Spacer(1, 0.2 * inch))
+            # --- END CORRECTED LINE ---
+        else:
+            elements.append(Paragraph("No data to plot Total Cumulative P&L for PDF.", styles['Normal']))
+
+        # Ticker Specific Cumulative P&L Plot (for PDF - all tickers on one plot if data exists)
+        cumulative_pnl_per_ticker_pdf = calculate_cumulative_pnl_per_ticker(df.copy())
+        if cumulative_pnl_per_ticker_pdf:
+            fig_pdf_ticker_cum_pnl, ax_pdf_ticker_cum_pnl = plt.subplots(figsize=(6, 3))
+            for ticker, pnl_series in cumulative_pnl_per_ticker_pdf.items():
+                sns.lineplot(x=pnl_series.index, y=pnl_series.values, ax=ax_pdf_ticker_cum_pnl, label=ticker, marker='o', markersize=2)
+            
+            ax_pdf_ticker_cum_pnl.set_title("Cumulative P&L per Ticker Over Time", fontsize=10)
+            ax_pdf_ticker_cum_pnl.set_xlabel("Date", fontsize=8)
+            ax_pdf_ticker_cum_pnl.set_ylabel("Cumulative P&L", fontsize=8)
+            ax_pdf_ticker_cum_pnl.tick_params(axis='x', rotation=45, labelsize=7)
+            ax_pdf_ticker_cum_pnl.tick_params(axis='y', labelsize=7)
+            ax_pdf_ticker_cum_pnl.grid(True)
+            ax_pdf_ticker_cum_pnl.legend(fontsize=6, loc='upper left')
+            fig_pdf_ticker_cum_pnl.tight_layout()
+
+            img_data_ticker_pnl = BytesIO()
+            fig_pdf_ticker_cum_pnl.savefig(img_data_ticker_pnl, format='png')
+            img_data_ticker_pnl.seek(0)
+            plt.close(fig_pdf_ticker_cum_pnl)
+
+            # --- CORRECTED LINE FOR TICKER PNL PLOT ---
+            elements.append(Paragraph("Cumulative P&L per Ticker", styles['h2']))
+            elements.append(Image(img_data_ticker_pnl)) # Use Image class
+            # --- END CORRECTED LINE ---
+        else:
+            elements.append(Paragraph("No data to plot Cumulative P&L per Ticker for PDF.", styles['Normal']))
+        
+        doc.build(elements)
+        messagebox.showinfo("Export Success", "Portfolio summary exported to PDF successfully!")
+
+    except Exception as e:
+        messagebox.showerror("Export Error", f"Failed to export summary: {e}")
+
+def on_toplevel_closing(toplevel_window):
+    """Handles the closing of Toplevel windows and resets their global variables."""
+    global show_records_window, summary_window, settings_window, book_selection_window
+    if toplevel_window == show_records_window:
+        show_records_window = None
+    elif toplevel_window == summary_window:
+        summary_window = None
+    elif toplevel_window == settings_window:
+        settings_window = None
+    elif toplevel_window == book_selection_window:
+        # If the book selection window is closed, it usually means the user cancelled.
+        # In this case, we should exit the main application as no book was chosen.
+        root.quit()
+        return
+    toplevel_window.destroy()
 
 def open_settings_window():
-    global settings_window # Declare global to assign to it
+    global settings_window
     if settings_window and settings_window.winfo_exists():
         settings_window.lift()
         return
 
     settings_window = Toplevel(root)
-    settings_window.title("Settings")
+    settings_window.title("Decimal Precision Settings")
     settings_window.geometry("300x250")
     center_window(settings_window) # Changed
-    settings_window.protocol("WM_DELETE_WINDOW", lambda: on_toplevel_closing(settings_window))
 
+    settings_window.protocol("WM_DELETE_WINDOW", lambda: on_toplevel_closing(settings_window))
 
     Label(settings_window, text="Set Decimal Precision:").pack(pady=10)
 
-    precision_labels = ['Quantity:', 'Price:', 'Total:', 'P&L:', 'Avg. Buy Price:']
-    precision_keys = ['quantity', 'price', 'total', 'pnl', 'avg_buy_price']
-    spinboxes = {}
-
-    for i, label_text in enumerate(precision_labels):
+    spinbox_entries = {}
+    for i, (key, value) in enumerate(decimal_precision.items()):
         frame = Frame(settings_window)
-        frame.pack(fill='x', padx=10, pady=2)
-        Label(frame, text=label_text, width=15, anchor='w').pack(side='left')
+        frame.pack(fill='x', padx=20, pady=5)
+
+        Label(frame, text=f"{key.replace('_', ' ').title()}:").pack(side='left')
         
-        key = precision_keys[i]
-        spinbox = Spinbox(frame, from_=0, to_=10, width=5, justify='center')
-        spinbox.set(decimal_precision[key]) # Set current value
+        spinbox = Spinbox(frame, from_=0, to=10, width=5) 
         spinbox.pack(side='right')
-        spinboxes[key] = spinbox
-    
-    def save_settings():
-        for key, spinbox in spinboxes.items():
+        
+        # CORRECTED: Use delete and insert to set Spinbox value
+        spinbox.delete(0, END)
+        spinbox.insert(0, decimal_precision[key])
+
+        spinbox_entries[key] = spinbox
+
+    def save_precision_settings():
+        for key, spinbox in spinbox_entries.items():
             try:
-                decimal_precision[key] = int(spinbox.get())
+                new_precision = int(spinbox.get())
+                if 0 <= new_precision <= 10:
+                    decimal_precision[key] = new_precision
+                else:
+                    messagebox.showwarning("Input Error", f"Precision for {key.replace('_', ' ')} must be between 0 and 10.")
+                    return
             except ValueError:
-                messagebox.showerror("Input Error", f"Invalid input for {key} precision. Must be an integer.")
+                messagebox.showwarning("Input Error", f"Precision for {key.replace('_', ' ')} must be a whole number.")
                 return
-        messagebox.showinfo("Settings Saved", "Decimal precision settings updated.")
+        
+        messagebox.showinfo("Settings Saved", "Decimal precision settings updated successfully!")
+        
+        # Re-open relevant windows to apply new precision if they are open
+        if show_records_window and show_records_window.winfo_exists():
+            show_records_window.destroy()
+            show_records()
+        if summary_window and summary_window.winfo_exists():
+            summary_window.destroy()
+            show_portfolio_summary()
+        
         settings_window.destroy()
 
-    Button(settings_window, text="Save Settings", command=save_settings).pack(pady=10)
+    Button(settings_window, text="Save Settings", command=save_precision_settings).pack(pady=10)
+    settings_window.grab_set()
+    root.wait_window(settings_win)
 
-# --- Exit Handling Functions ---
-def on_toplevel_closing(toplevel_window):
-    """Handles the closing of Toplevel windows."""
-    if messagebox.askokcancel("Close Window", "Are you sure you want to close this window?"):
-        # If it's the records or summary window, clear the global reference
-        global show_records_window, summary_window, settings_window
-        if toplevel_window == show_records_window:
-            show_records_window = None
-        elif toplevel_window == summary_window:
-            summary_window = None
-        elif toplevel_window == settings_window: # Added for settings window
-            settings_window = None
-        toplevel_window.destroy()
 
-def on_closing():
-    """Handles the closing of the main application window."""
-    if messagebox.askokcancel("Quit", "Do you want to quit the application?"):
-        root.quit() # This will terminate the entire Tkinter application
+# --- Initial Book Selection Window ---
+def show_book_selection_window():
+    global book_selection_window, EXCEL_FILE
+    
+    book_selection_window = Toplevel()
+    book_selection_window.title("Select Trading Book")
+    book_selection_window.geometry("350x200")
+    center_window(book_selection_window)
+    book_selection_window.resizable(False, False)
+
+    # Make sure closing this window exits the application if no book is selected
+    book_selection_window.protocol("WM_DELETE_WINDOW", lambda: root.quit()) 
+
+    Label(book_selection_window, text="Please select a trading book or create a new one:", wraplength=300).pack(pady=15)
+
+    def select_existing_book():
+        file_path = filedialog.askopenfilename(defaultextension=".xlsx",
+                                               filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+                                               title="Select Existing Trading Book")
+        if file_path:
+            init_excel_file(file_path)
+            book_selection_window.destroy()
+            root.deiconify() # Show the main application window
+        else:
+            messagebox.showinfo("Cancelled", "No file selected. Please choose a book or create a new one.")
+
+    def create_new_book():
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx",
+                                               filetypes=[("Excel files", "*.xlsx")],
+                                               title="Create New Trading Book")
+        if file_path:
+            init_excel_file(file_path)
+            messagebox.showinfo("Success", f"New book created at: {file_path}")
+            book_selection_window.destroy()
+            root.deiconify() # Show the main application window
+        else:
+            messagebox.showinfo("Cancelled", "New book creation cancelled.")
+
+    Button(book_selection_window, text="Open Existing Book", command=select_existing_book).pack(pady=5, fill='x', padx=50)
+    Button(book_selection_window, text="Create New Book", command=create_new_book).pack(pady=5, fill='x', padx=50)
+
+    # Hide the main window initially
+    root.withdraw() 
+    book_selection_window.grab_set() # Make this window modal
+    root.wait_window(book_selection_window) # Wait for this window to close
 
 
 # --- Main Application Window ---
-init_excel_file()
-
+# Don't call init_excel_file here directly anymore
 root = Tk()
 root.title("Trading Book Manager")
 root.geometry("400x300")
 root.resizable(False, False) # Disable resizing for a fixed layout
 
 # Bind the close protocol for the main window
-root.protocol("WM_DELETE_WINDOW", on_closing)
-
+root.protocol("WM_DELETE_WINDOW", lambda: on_toplevel_closing(root)) # Use on_toplevel_closing for root too
 
 # Main buttons
 Button(root, text="Add Record", command=lambda: add_edit_form(update_callback=show_records)).pack(pady=10, fill='x', padx=50)
@@ -939,10 +1157,15 @@ Button(root, text="Show Records", command=show_records).pack(pady=10, fill='x', 
 Button(root, text="Show Portfolio Summary", command=show_portfolio_summary).pack(pady=10, fill='x', padx=50)
 Button(root, text="Undo Last Action", command=undo_last_action).pack(pady=10, fill='x', padx=50)
 Button(root, text="Redo Last Undo", command=redo_last_undo).pack(pady=10, fill='x', padx=50)
+Button(root, text="Export Summary to PDF", command=export_summary_pdf).pack(pady=10, fill='x', padx=50)
 Button(root, text="Settings", command=open_settings_window).pack(pady=10, fill='x', padx=50)
 
 # Add an Exit button
-Button(root, text="Exit", command=on_closing, bg="red", fg="white").pack(pady=20, fill='x', padx=50)
+Button(root, text="Exit", command=lambda: on_toplevel_closing(root), bg="red", fg="white").pack(pady=20, fill='x', padx=50)
 
+# Show the book selection window first
+show_book_selection_window()
 
+# Start the Tkinter event loop only after a book is selected/created
 root.mainloop()
+
